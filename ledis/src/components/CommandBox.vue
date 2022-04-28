@@ -1,10 +1,10 @@
 <template>
-    <div class="card" style="height: 100vh">
+    <div class="card">
         <div class="card-header text-center">WELCOME TO LEDIS</div>
         <div class="card-body">
             <div :key="element.id" v-for="element in conversation">
                 <div>> {{ element.req }}</div>
-                <div>{{ element.res }}</div>
+                <div :class="element.res.substring(0, 5).toLowerCase()">{{ element.res }}</div>
             </div>
         </div>
         <div class="card-footer text-muted containter-fluid" style="background-color: black">
@@ -12,20 +12,39 @@
                 <form @submit="onSubmit">
                     <div class="input-group">
                         <div class="input-group-prepend">
-                            <div class="input-group-text" style="color: white; background-color: black; border: 0">
+                            <div class="input-group-text input-command">
                                 >Ledis:</div>
                         </div>
-                        <input type="text" class="form-control" id="inlineFormInputGroupUsername2"
-                            style="color: white; background-color: black; border: 0" name="input" v-model="input" />
+                        <input type="text" class="form-control input-command" id="inlineFormInputGroupUsername2" name="input" v-model="input" />
                     </div>
                 </form>
 
             </div>
         </div>
+        <div id="output" style="display:none"></div>
     </div>
 </template>
+<style scoped>
+.card {
+    height: 100vh
+}
+.error {
+    background-color: red;
+    color: white
+}
+.card-header {
+    background-color: palevioletred;
+    border: 1px solid black;
+    color: whitesmoke;
+}
+.input-command {
+    color: white; 
+    background-color: black; 
+    border: 0
+}
+</style>
 <script>
-import { onMounted } from '@vue/runtime-core'
+import CryptoJS from 'crypto-js';
 export default {
     name: 'CommandBox',
     data() {
@@ -33,7 +52,8 @@ export default {
             input: '',
             conversation: [],
             stored_data: {},
-            expiration: {}
+            expiration: {},
+            secret: "abc1234!"
         }
     },
     mounted() {
@@ -41,7 +61,7 @@ export default {
         console.log(get_data)
         if (get_data) {
             this.stored_data = JSON.parse(get_data)
-            localStorage.clear()
+            localStorage.removeItem("stored_data")
         }
         window.addEventListener('beforeunload', this.beforWindowClose)
     },
@@ -54,12 +74,17 @@ export default {
             }
             let input_split = this.input.split(" ")
             var req_res = { id: this.conversation.length + 1, req: this.input }
+
             if (input_split[0].toUpperCase() === "SET") {
                 this.set(input_split[1], input_split[2])
                 req_res["res"] = "OK"
             }
             if (input_split[0].toUpperCase() === "GET") {
-                req_res["res"] = this.get(input_split[1])
+                if (this.validateKey(input_split[1])) {
+                    req_res["res"] = this.get(input_split[1])
+                } else {
+                    req_res["res"] = "null"
+                }
             }
             if (input_split[0].toUpperCase() === "SADD") {
                 for (let index = 2; index < input_split.length; index++) {
@@ -67,17 +92,25 @@ export default {
                 }
             }
             if (input_split[0].toUpperCase() === "SREM") {
-                for (let index = 2; index < input_split.length; index++) {
-                    req_res["res"] = "Current length of this set: " + this.srem(input_split[1], input_split[index])
+                if (this.validateKey(input_split[1])) {
+                    for (let index = 2; index < input_split.length; index++) {
+                        req_res["res"] = "Current length of this set: " + this.srem(input_split[1], input_split[index])
+                    }
+                } else {
+                    req_res["res"] = "ERROR: Can't find this key"
                 }
             }
             if (input_split[0].toUpperCase() === "SMEMBERS") {
-                const result = this.smembers(input_split[1])
-                let res = ''
-                for (let index = 0; index < result.length; index++) {
-                    res += result[index] + ' '
+                if (this.validateKey(input_split[1])) {
+                    const result = this.smembers(input_split[1])
+                    let res = ''
+                    for (let index = 0; index < result.length; index++) {
+                        res += result[index] + ' '
+                    }
+                    req_res["res"] = res
+                } else {
+                    req_res["res"] = "null"
                 }
-                req_res["res"] = res
             }
 
             if (input_split[0].toUpperCase() === "SINTER") {
@@ -85,7 +118,11 @@ export default {
             }
 
             if (input_split[0].toUpperCase() === "KEYS") {
-                req_res["res"] = this.keys()
+                if (this.keys().length === 0) {
+                    req_res["res"] = "None"
+                } else {
+                    req_res["res"] = this.keys()
+                }
             }
 
             if (input_split[0].toUpperCase() === "DEL") {
@@ -99,13 +136,19 @@ export default {
             if (input_split[0].toUpperCase() === "TTL") {
                 req_res["res"] = this.ttl(input_split[1])
             }
+            if (input_split[0].toUpperCase() === "SAVE") {
+                this.save()
+                req_res["res"] = "OK"
+            }
+            if (input_split[0].toUpperCase() === "RESTORE") {
+                req_res["res"] = this.restore()
+            }
             this.conversation.push(req_res)
             this.input = ''
         },
 
         beforWindowClose() {
             const string_result = JSON.stringify(JSON.parse(JSON.stringify(this.stored_data)))
-            console.log(string_result)
             localStorage.setItem("stored_data", string_result)
         },
 
@@ -158,13 +201,13 @@ export default {
         del(key) {
             delete this.stored_data[key]
         },
-        expire: function(key, seconds) {
+        expire: function (key, seconds) {
             var currentTime = Date.now()
 
             let interval = setInterval(() => {
                 console.log((seconds - getTimeLeft()) + "s")
                 this.expiration[key] = (seconds - getTimeLeft()) + "s"
-                if (getTimeLeft() >= seconds){
+                if (getTimeLeft() >= seconds) {
                     this.del(key)
                     delete this.expiration[key]
                     clearInterval(interval)
@@ -175,11 +218,45 @@ export default {
                 return Math.ceil((Date.now() - currentTime) / 1000);
             }
         },
-        ttl(key){
-            if(!this.expiration[key]){
+        ttl(key) {
+            if (!this.expiration[key]) {
                 return "null"
             }
             return this.expiration[key]
+        },
+        save() {
+            const encrypted_data = CryptoJS.AES.encrypt(JSON.stringify(this.stored_data), this.secret).toString();
+            localStorage.setItem("snapshot", encrypted_data)
+        },
+        restore() {
+            const enc_data = localStorage.getItem("snapshot")
+            try {
+                this.stored_data = JSON.parse(CryptoJS.AES.decrypt(enc_data, this.secret).toString(CryptoJS.enc.Utf8));
+                return "OK"
+            } catch (error) {
+                return "ERROR: Your snapshot database is changed"
+            }
+        },
+        validateKey(key) {
+            if (!this.stored_data[key]) {
+                return false
+            }
+            return true
+        },
+        handleAddValueToStringError(key) {
+            if (typeof this.stored_data[key] === 'string') {
+                return false
+            }
+            return true
+        },
+        handleCommandError(command, input) {
+            if (command === "SET" && input.length > 3 || command === "GET" && input.length > 2) {
+                return false
+            }
+            if ((command === "SINTER" || command === "SMEMBERS") && input.length < 2) {
+                return false
+            }
+            return true
         }
     },
 }
